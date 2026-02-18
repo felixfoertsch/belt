@@ -1,0 +1,25 @@
+# Example config. You must replace endpoints with real values from the dashboard network calls.
+base_url: https://dashboard.uberspace.de
+endpoints:
+  login:
+    method: POST
+    path: /api/login
+    headers:
+      Content-Type: application/json
+    body: '{"email":"{{email}}","password":"{{password}}"}'
+    csrf:
+      from: cookie
+      name: csrf_token
+      header: X-CSRF-Token
+  create_asteroid:
+    method: POST
+    path: /api/asteroids
+    headers:
+      Content-Type: application/json
+    body: '{"name":"{{asteroid}}"}'
+  add_ssh_key:
+    method: POST
+    path: /api/ssh-keys
+    headers:
+      Content-Type: application/json
+    body: '{"name":"{{key_name}}","key":"{{public_key}}"}'
