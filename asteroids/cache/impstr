@@ -1,0 +1,9 @@
+UPDATED=2026-02-25T17:31:24
+NAME=impstr
+SERVER=pandora.uberspace.de
+VERSION=8
+QUOTA=
+PORTS=Domain   Path            Destination   Port   Prefix,*        /               APACHE        None   keep,*        /StiggerDLBot   PORT          8001   remove,*        /movie          APACHE        None   keep
+WEB_DOMAINS=Domain,impstr.uber.space
+MAIL_DOMAINS=Domain              Alias of   DNS state,impstr.uber.space              VALID
+MAIL_USERS=Name         Domain      sysmail   catchall   alias   Alias of     Forwards,abuse        impstr.u…   no        no         yes     sysmail@i…,hostmaster   impstr.u…   no        no         yes     sysmail@i…,postmaster   impstr.u…   no        no         yes     sysmail@i…,sysmail      impstr.u…   yes       no         no                   uberspac…

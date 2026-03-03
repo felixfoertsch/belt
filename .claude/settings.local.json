@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:manual.uberspace.de)",
+      "WebFetch(domain:u8manual.uberspace.de)",
+      "Bash(rustc:*)",
+      "Bash(git:*)"
+    ]
+  }
+}

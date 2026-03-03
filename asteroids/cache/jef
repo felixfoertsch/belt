@@ -1,0 +1,9 @@
+UPDATED=2026-02-25T17:31:42
+NAME=jef
+SERVER=caliban.uberspace.de
+VERSION=7
+QUOTA=
+PORTS=
+WEB_DOMAINS=bitwarden.jef-sachsen.de,email.jef-sachsen.de,eud-sachsen.de,eurom.at,jef-leipzig.de,jef-sachsen.de,jef.uber.space,mail.jef-sachsen.de,newsletter.jef-sachsen.de
+MAIL_DOMAINS=eud-sachsen.de,eurom.at,jef-leipzig.de,jef-sachsen.de,jef.uber.space,mail.jef-sachsen.de
+MAIL_USERS=+,abuse,admin,annika.fleischer,anton.hussing,bitwarden,bjoern.donath,catchall,emely.schaefer,fabian.brueder,felix.foertsch,finnja.klinger,hannes.lauter,hostmaster,info,johannes.kropp,klaas.wibker,kontakt,kristina.oertel,laura.greiff,laurenz.frenzel,maria-teresa.roelke,natalie.semin,no-reply,nora.sandner,paula.kirchner,postmaster,susan.wolf,tanja.schmidt,tim.meglitsch,vincent.kaienburg,vorstand
