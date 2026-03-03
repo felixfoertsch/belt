@@ -1,0 +1,19 @@
+[package]
+name = "uc"
+version = "2026.3.3"
+edition = "2024"
+
+[[bin]]
+name = "uc"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+dirs = "6"
+colored = "3"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+tempfile = "3"
