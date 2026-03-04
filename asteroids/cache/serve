@@ -1,9 +1,0 @@
-UPDATED=2026-02-25T17:31:22
-NAME=serve
-SERVER=prospero.uberspace.de
-VERSION=8
-QUOTA=
-PORTS=Domain   Path              Destination   Port   Prefix,*        /                 APACHE        None   keep,*        /sticker-cloner   PORT          8080   remove
-WEB_DOMAINS=Domain,serve.uber.space
-MAIL_DOMAINS=Domain             Alias of   DNS state,serve.uber.space              VALID
-MAIL_USERS=Name         Domain      sysmail   catchall   alias   Alias of     Forwards,abuse        serve.ub…   no        no         yes     sysmail@s…,hostmaster   serve.ub…   no        no         yes     sysmail@s…,postmaster   serve.ub…   no        no         yes     sysmail@s…,sysmail      serve.ub…   yes       no         no                   uberspac…
