@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# build.sh — build static uc binaries for all targets
-#
+#MISE description="Build static uc binaries for all targets"
+set -euo pipefail
+
 # Produces fully static, zero-dependency binaries:
 #   dist/uc-aarch64-apple-darwin      (macOS Apple Silicon)
 #   dist/uc-x86_64-unknown-linux-musl (Linux x86_64, static)
@@ -11,12 +12,9 @@
 #   - rustup target x86_64-unknown-linux-musl (one-time setup)
 #
 # Usage:
-#   ./build.sh              build all targets
-#   ./build.sh macos        build macOS only
-#   ./build.sh linux        build Linux only
-set -euo pipefail
-
-eval "$(mise activate bash 2>/dev/null)" || true
+#   mise run build              build all targets
+#   mise run build -- macos     build macOS only
+#   mise run build -- linux     build Linux only
 
 DIST="dist"
 mkdir -p "$DIST"
@@ -39,7 +37,7 @@ case "${1:-all}" in
 	macos) build_macos ;;
 	linux) build_linux ;;
 	all)   build_macos; build_linux ;;
-	*)     echo "usage: $0 [macos|linux|all]"; exit 1 ;;
+	*)     echo "usage: mise run build -- [macos|linux|all]"; exit 1 ;;
 esac
 
 echo ""
