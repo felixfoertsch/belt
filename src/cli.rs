@@ -11,7 +11,7 @@ use crate::status;
 use crate::translate;
 
 #[derive(Parser)]
-#[command(name = "uc", about = "uberspace account manager")]
+#[command(name = "belt", about = "uberspace account manager")]
 struct Cli {
 	#[command(subcommand)]
 	command: Option<Commands>,
@@ -47,6 +47,9 @@ enum Commands {
 		/// Refresh all accounts via SSH before showing
 		#[arg(long)]
 		refresh: bool,
+		/// Emit machine-readable JSON
+		#[arg(long)]
+		json: bool,
 	},
 
 	/// Import asteroids from the legacy asteroids.list file
@@ -57,7 +60,7 @@ enum Commands {
 }
 
 pub fn run() {
-	// clap's derive approach doesn't easily support `uc <name> <args...>` alongside
+	// clap's derive approach doesn't easily support `belt <name> <args...>` alongside
 	// named subcommands. We handle this by trying clap first, and falling back to
 	// manual parsing for asteroid passthrough.
 	let result = match Cli::try_parse() {
@@ -100,12 +103,12 @@ fn dispatch(cli: Cli) -> Result<(), String> {
 		}) => cmd_add(&name, &server, version),
 		Some(Commands::List) => cmd_list(),
 		Some(Commands::Remove { name }) => cmd_remove(&name),
-		Some(Commands::Status { refresh }) => cmd_status(refresh),
+		Some(Commands::Status { refresh, json }) => cmd_status(refresh, json),
 		Some(Commands::Import { path }) => cmd_import(&path),
 		None => {
 			// Fall through to passthrough if args present
 			if cli.args.is_empty() {
-				Cli::parse_from(["uc", "--help"]);
+				Cli::parse_from(["belt", "--help"]);
 				Ok(())
 			} else {
 				handle_passthrough(&cli.args[0], &cli.args[1..])
@@ -115,9 +118,7 @@ fn dispatch(cli: Cli) -> Result<(), String> {
 }
 
 fn cmd_add(name: &str, server: &str, version: u8) -> Result<(), String> {
-	if version != 7 && version != 8 {
-		return Err(format!("version must be 7 or 8, got {version}"));
-	}
+	registry::validate_asteroid(name, server, version)?;
 	let path = registry::registry_path()?;
 	let mut reg = Registry::load(&path)?;
 	reg.add(Asteroid {
@@ -139,7 +140,7 @@ fn cmd_list() -> Result<(), String> {
 	let reg = Registry::load(&path)?;
 	if reg.asteroid.is_empty() {
 		eprintln!(
-			"{} no accounts registered. Use: uc add <name> <server> <version>",
+			"{} no accounts registered. Use: belt add <name> <server> <version>",
 			"[warn]".yellow()
 		);
 		return Ok(());
@@ -159,6 +160,13 @@ fn cmd_list() -> Result<(), String> {
 }
 
 fn cmd_remove(name: &str) -> Result<(), String> {
+	if name.is_empty()
+		|| !name
+			.bytes()
+			.all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+	{
+		return Err("invalid asteroid name".into());
+	}
 	let path = registry::registry_path()?;
 	let mut reg = Registry::load(&path)?;
 	if !reg.remove(name) {
@@ -170,17 +178,17 @@ fn cmd_remove(name: &str) -> Result<(), String> {
 	Ok(())
 }
 
-fn cmd_status(refresh: bool) -> Result<(), String> {
+fn cmd_status(refresh: bool, json: bool) -> Result<(), String> {
 	let path = registry::registry_path()?;
 	let reg = Registry::load(&path)?;
 	if reg.asteroid.is_empty() {
 		eprintln!(
-			"{} no accounts registered. Use: uc add <name> <server> <version>",
+			"{} no accounts registered. Use: belt add <name> <server> <version>",
 			"[warn]".yellow()
 		);
 		return Ok(());
 	}
-	status::show_all(refresh, &reg.asteroid)
+	status::show_all(refresh, json, &reg.asteroid)
 }
 
 fn cmd_import(legacy_path: &str) -> Result<(), String> {
@@ -208,8 +216,11 @@ fn cmd_import(legacy_path: &str) -> Result<(), String> {
 		let server = parts[1];
 		let version: u8 = parts
 			.get(2)
-			.and_then(|v| v.parse().ok())
-			.unwrap_or(7);
+			.ok_or_else(|| format!("missing version in line: {line}"))?
+			.parse()
+			.map_err(|_| format!("invalid version in line: {line}"))?;
+		registry::validate_asteroid(name, server, version)
+			.map_err(|e| format!("invalid asteroid in line '{line}': {e}"))?;
 
 		reg.add(Asteroid {
 			name: name.to_string(),
@@ -290,7 +301,7 @@ fn handle_passthrough(name: &str, rest: &[String]) -> Result<(), String> {
 		.lookup(name)
 		.ok_or_else(|| format!("'{name}' not found in registry"))?;
 
-	// Special case: `uc <name> status`
+	// Special case: `belt <name> status`
 	if rest.first().is_some_and(|s| s == "status") {
 		let s = status::refresh_one(asteroid)?;
 		println!();
@@ -299,9 +310,16 @@ fn handle_passthrough(name: &str, rest: &[String]) -> Result<(), String> {
 		return Ok(());
 	}
 
-	// Translate v7/v8 and pass through to SSH
+	// Detect generation before selecting generation-specific command forms.
+	let version = status::detect_version(asteroid)?;
+	if version != asteroid.version {
+		return Err(format!(
+			"'{name}' is registered as U{}, but /etc/os-release reports U{}; update registry before retrying",
+			asteroid.version, version
+		));
+	}
 	let args: Vec<String> = rest.to_vec();
-	let translated = translate::translate(asteroid.version, &args)?;
+	let translated = translate::translate(version, &args)?;
 	let code = ssh::passthrough(asteroid, &translated)?;
 	if code != 0 {
 		process::exit(code);

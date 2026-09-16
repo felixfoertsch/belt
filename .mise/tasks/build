@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-#MISE description="Build static uc binaries for all targets"
+#MISE description="Build belt binaries for supported targets"
 set -euo pipefail
 
-# Produces fully static, zero-dependency binaries:
-#   dist/uc-aarch64-apple-darwin      (macOS Apple Silicon)
-#   dist/uc-x86_64-unknown-linux-musl (Linux x86_64, static)
+# Produces standalone binaries:
+#   dist/belt-aarch64-apple-darwin      (macOS Apple Silicon)
+#   dist/belt-x86_64-unknown-linux-musl (Linux x86_64, static)
 #
 # Requirements:
-#   - mise (manages rust toolchain)
+#   - mise (manages Rust toolchain)
 #   - zig + cargo-zigbuild (for Linux cross-compilation)
-#   - rustup target x86_64-unknown-linux-musl (one-time setup)
+#   - Rust target x86_64-unknown-linux-musl
 #
 # Usage:
 #   mise run build              build all targets
@@ -22,24 +22,24 @@ mkdir -p "$DIST"
 build_macos() {
 	echo "==> building macOS (aarch64-apple-darwin) ..."
 	cargo build --release
-	cp target/release/uc "$DIST/uc-aarch64-apple-darwin"
-	echo "[ok] $DIST/uc-aarch64-apple-darwin"
+	cp target/release/belt "$DIST/belt-aarch64-apple-darwin"
+	echo "[ok] $DIST/belt-aarch64-apple-darwin"
 }
 
 build_linux() {
 	echo "==> building Linux (x86_64-unknown-linux-musl) ..."
 	cargo zigbuild --release --target x86_64-unknown-linux-musl
-	cp target/x86_64-unknown-linux-musl/release/uc "$DIST/uc-x86_64-unknown-linux-musl"
-	echo "[ok] $DIST/uc-x86_64-unknown-linux-musl"
+	cp target/x86_64-unknown-linux-musl/release/belt "$DIST/belt-x86_64-unknown-linux-musl"
+	echo "[ok] $DIST/belt-x86_64-unknown-linux-musl"
 }
 
 case "${1:-all}" in
 	macos) build_macos ;;
 	linux) build_linux ;;
-	all)   build_macos; build_linux ;;
-	*)     echo "usage: mise run build -- [macos|linux|all]"; exit 1 ;;
+	all) build_macos; build_linux ;;
+	*) echo "usage: mise run build -- [macos|linux|all]"; exit 1 ;;
 esac
 
 echo ""
 echo "==> done"
-ls -lh "$DIST"/uc-*
+ls -lh "$DIST"/belt-*

@@ -1,3 +1,5 @@
 /target/
 /dist/
+/legacy/asteroids.list
 .DS_Store
+.project.toml

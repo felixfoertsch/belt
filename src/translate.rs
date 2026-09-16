@@ -25,6 +25,11 @@ pub fn translate(version: u8, args: &[String]) -> Result<Vec<String>, String> {
 		// port list → web backend list
 		["port", "list"] => Ok(words("web backend list")),
 
+		["records", "show", domain] => Ok(words_with("web domain show", domain)),
+
+		["tools", "version", "list"] => Ok(words("tool version list")),
+		["tools", "version", "show", tool] => Ok(words_with("tool version show", tool)),
+
 		// tools version use <tool> <ver> → tool version set <tool> <ver>
 		["tools", "version", "use", tool, ver] => {
 			Ok(vec![
@@ -36,12 +41,11 @@ pub fn translate(version: u8, args: &[String]) -> Result<Vec<String>, String> {
 			])
 		}
 
-		// tools restart <tool> → web <tool> reload
-		["tools", "restart", tool] => {
-			Ok(vec!["web".into(), (*tool).into(), "reload".into()])
-		}
+		["tools", "restart", _] => Err(
+			"tools restart has no U8 equivalent; run a generation-specific command".into(),
+		),
 
-		// web backend set <path> --http --port <n> → web backend add <path> port <n>
+		// web backend set <path> --http --port <n> → web backend add <path> port <n> --force
 		["web", "backend", "set", path, "--http", "--port", port] => {
 			Ok(vec![
 				"web".into(),
@@ -50,6 +54,7 @@ pub fn translate(version: u8, args: &[String]) -> Result<Vec<String>, String> {
 				(*path).into(),
 				"port".into(),
 				(*port).into(),
+				"--force".into(),
 			])
 		}
 
@@ -107,21 +112,44 @@ mod tests {
 	}
 
 	#[test]
+	fn v8_records_show() {
+		assert_eq!(
+			translate(8, &args("records show example.org")).unwrap(),
+			args("web domain show example.org")
+		);
+	}
+
+	#[test]
+	fn v8_tools_version_list_and_show() {
+		assert_eq!(
+			translate(8, &args("tools version list")).unwrap(),
+			args("tool version list")
+		);
+		assert_eq!(
+			translate(8, &args("tools version show php")).unwrap(),
+			args("tool version show php")
+		);
+	}
+
+	#[test]
 	fn v8_tools_version_use() {
 		let result = translate(8, &args("tools version use php 8.2")).unwrap();
 		assert_eq!(result, args("tool version set php 8.2"));
 	}
 
 	#[test]
-	fn v8_tools_restart() {
-		let result = translate(8, &args("tools restart php")).unwrap();
-		assert_eq!(result, args("web php reload"));
+	fn v8_tools_restart_is_rejected() {
+		let result = translate(8, &args("tools restart php"));
+		assert_eq!(
+			result.unwrap_err(),
+			"tools restart has no U8 equivalent; run a generation-specific command"
+		);
 	}
 
 	#[test]
 	fn v8_web_backend_set() {
 		let result = translate(8, &args("web backend set / --http --port 8080")).unwrap();
-		assert_eq!(result, args("web backend add / port 8080"));
+		assert_eq!(result, args("web backend add / port 8080 --force"));
 	}
 
 	#[test]

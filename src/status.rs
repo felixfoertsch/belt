@@ -9,29 +9,28 @@ use crate::ssh;
 /// Mirrors the bash heredoc from the original `asteroids` script.
 const REMOTE_STATUS_SCRIPT: &str = r#"
 version="$1"
-set +e +u
+set -eu
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/bin:$HOME/.local/bin:$PATH"
 
-if [ "$version" = "8" ]; then
-	uberspace web backend list  </dev/null > "$tmpdir/ports" 2>"$tmpdir/e.ports" &
-else
-	uberspace port list         </dev/null > "$tmpdir/ports" 2>"$tmpdir/e.ports" &
-fi
-uberspace web domain list  </dev/null > "$tmpdir/web"   2>"$tmpdir/e.web"   &
-uberspace mail domain list </dev/null > "$tmpdir/mdom"  2>"$tmpdir/e.mdom"  &
-if [ "$version" = "8" ]; then
-	uberspace mail address list </dev/null > "$tmpdir/musr"  2>"$tmpdir/e.musr"  &
-else
-	uberspace mail user list    </dev/null > "$tmpdir/musr"  2>"$tmpdir/e.musr"  &
-fi
-wait
+run() {
+	timeout 20 uberspace "$@" </dev/null
+}
 
-for _ef in "$tmpdir"/e.*; do
-	[ -s "$_ef" ] && cat "$_ef" >&2
-done
+if [ "$version" = "8" ]; then
+	run web backend list > "$tmpdir/ports"
+else
+	run port list > "$tmpdir/ports"
+fi
+run web domain list > "$tmpdir/web"
+run mail domain list > "$tmpdir/mdom"
+if [ "$version" = "8" ]; then
+	run mail address list > "$tmpdir/musr"
+else
+	run mail user list > "$tmpdir/musr"
+fi
 
 parse_list() {
 	local f="$1"
@@ -55,6 +54,52 @@ printf 'MDOM=%s\n'    "$mdom"
 printf 'MUSR=%s\n'    "$musr"
 "#;
 
+const DETECT_VERSION_SCRIPT: &str = r#"
+set -eu
+. /etc/os-release
+case "${ID:-}:${VERSION_ID:-}" in
+	centos:7|centos:7.*) printf '7\n' ;;
+	arch:*) printf '8\n' ;;
+	*) printf 'unsupported operating system: ID=%s VERSION_ID=%s\n' "${ID:-}" "${VERSION_ID:-}" >&2; exit 64 ;;
+esac
+"#;
+
+fn parse_detected_version(output: &ssh::RemoteOutput) -> Result<u8, String> {
+	if output.exit_code != 0 {
+		let detail = output.stderr.trim();
+		return Err(if detail.is_empty() {
+			format!("remote generation detection failed with exit code {}", output.exit_code)
+		} else {
+			format!("remote generation detection failed: {detail}")
+		});
+	}
+	match output.stdout.trim() {
+		"7" => Ok(7),
+		"8" => Ok(8),
+		other => Err(format!("invalid generation response: {other:?}")),
+	}
+}
+
+pub fn detect_version(asteroid: &Asteroid) -> Result<u8, String> {
+	let output = ssh::capture(asteroid, DETECT_VERSION_SCRIPT, &[])?;
+	parse_detected_version(&output)
+}
+
+fn remote_failure(asteroid: &Asteroid, output: &ssh::RemoteOutput) -> String {
+	let detail = output.stderr.trim();
+	if detail.is_empty() {
+		format!(
+			"remote command on {}@{} failed with exit code {}",
+			asteroid.name, asteroid.server, output.exit_code
+		)
+	} else {
+		format!(
+			"remote command on {}@{} failed with exit code {}: {detail}",
+			asteroid.name, asteroid.server, output.exit_code
+		)
+	}
+}
+
 /// Refresh status for a single asteroid via SSH, cache the result, and return it.
 pub fn refresh_one(asteroid: &Asteroid) -> Result<CachedStatus, String> {
 	eprintln!(
@@ -64,36 +109,31 @@ pub fn refresh_one(asteroid: &Asteroid) -> Result<CachedStatus, String> {
 		asteroid.server
 	);
 
-	let raw = ssh::capture(asteroid, REMOTE_STATUS_SCRIPT)?;
+	let detected_version = detect_version(asteroid)?;
+	if detected_version != asteroid.version {
+		return Err(format!(
+			"registered as U{}, but /etc/os-release reports U{}; update registry before retrying",
+			asteroid.version, detected_version
+		));
+	}
+	let output = ssh::capture(
+		asteroid,
+		REMOTE_STATUS_SCRIPT,
+		&[detected_version.to_string()],
+	)?;
+	if output.exit_code != 0 {
+		return Err(remote_failure(asteroid, &output));
+	}
+	if !output.stderr.trim().is_empty() {
+		eprintln!("{}", output.stderr.trim_end());
+	}
+	let raw = output.stdout;
 	let updated = Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
 
-	let mut ports = Vec::new();
-	let mut web = Vec::new();
-	let mut mdom = Vec::new();
-	let mut musr = Vec::new();
-
-	for line in raw.lines() {
-		let line = line.trim_end_matches('\r');
-		if let Some(val) = line.strip_prefix("PORTS=") {
-			ports = parse_csv(val);
-		} else if let Some(val) = line.strip_prefix("WEB=") {
-			web = parse_csv(val);
-		} else if let Some(val) = line.strip_prefix("MDOM=") {
-			mdom = parse_csv(val);
-		} else if let Some(val) = line.strip_prefix("MUSR=") {
-			musr = parse_csv(val);
-		}
-	}
-
-	if ports.is_empty() && web.is_empty() && mdom.is_empty() && musr.is_empty() {
-		eprintln!(
-			"{} no data from {} — check stderr above",
-			"[warn]".yellow(),
-			asteroid.name
-		);
-	}
+	let (ports, web, mdom, musr) = parse_status_output(&raw)?;
 
 	let status = CachedStatus {
+		schema_version: 1,
 		updated,
 		name: asteroid.name.clone(),
 		server: asteroid.server.clone(),
@@ -134,30 +174,61 @@ pub fn print_status(status: &CachedStatus, age_display: &str) {
 }
 
 /// Show aggregate status from cache for all asteroids.
-pub fn show_all(refresh: bool, asteroids: &[Asteroid]) -> Result<(), String> {
+pub fn show_all(refresh: bool, json: bool, asteroids: &[Asteroid]) -> Result<(), String> {
 	if refresh {
+		let mut refreshed = Vec::new();
 		for asteroid in asteroids {
 			match refresh_one(asteroid) {
 				Ok(status) => {
-					println!();
-					let age = compute_age(&status.updated);
-					print_status(&status, &age);
+					if json {
+						refreshed.push(status);
+					} else {
+						println!();
+						let age = compute_age(&status.updated);
+						print_status(&status, &age);
+					}
 				}
 				Err(e) => {
 					eprintln!("{} {}: {e}", "[error]".red(), asteroid.name);
 				}
 			}
 		}
+		if json {
+			println!(
+				"{}",
+				serde_json::to_string_pretty(&refreshed)
+					.map_err(|e| format!("failed to serialize status: {e}"))?
+			);
+		}
 		return Ok(());
 	}
 
-	let cached = cache::load_all()?;
+	let mut cached = Vec::new();
+	for asteroid in asteroids {
+		match cache::load(&asteroid.name)? {
+			Some(status)
+				if status.server == asteroid.server && status.version == asteroid.version =>
+			{
+				cached.push(status)
+			}
+			Some(_) => eprintln!(
+				"{} {} cache metadata does not match registry",
+				"[warn]".yellow(), asteroid.name
+			),
+			None => eprintln!(
+				"{} {} has no cached status — run: belt status --refresh",
+				"[warn]".yellow(), asteroid.name
+			),
+		}
+	}
 	if cached.is_empty() {
-		eprintln!(
-			"{} no cached status — run: {} {}",
-			"[warn]".yellow(),
-			"uc".blue(),
-			"status --refresh".blue()
+		return Ok(());
+	}
+	if json {
+		println!(
+			"{}",
+			serde_json::to_string_pretty(&cached)
+				.map_err(|e| format!("failed to serialize status: {e}"))?
 		);
 		return Ok(());
 	}
@@ -181,12 +252,38 @@ pub fn show_all(refresh: bool, asteroids: &[Asteroid]) -> Result<(), String> {
 	if stale_count > 0 {
 		println!();
 		eprintln!(
-			"{} {stale_count} account(s) have stale cache (>24h) — run: uc status --refresh",
+			"{} {stale_count} account(s) have stale cache (>24h) — run: belt status --refresh",
 			"[warn]".yellow()
 		);
 	}
 
 	Ok(())
+}
+
+fn parse_status_output(raw: &str) -> Result<(Vec<String>, Vec<String>, Vec<String>, Vec<String>), String> {
+	let mut fields: [Option<Vec<String>>; 4] = [None, None, None, None];
+	for line in raw.lines() {
+		let line = line.trim_end_matches('\r');
+		let (index, value) = if let Some(value) = line.strip_prefix("PORTS=") {
+			(0, value)
+		} else if let Some(value) = line.strip_prefix("WEB=") {
+			(1, value)
+		} else if let Some(value) = line.strip_prefix("MDOM=") {
+			(2, value)
+		} else if let Some(value) = line.strip_prefix("MUSR=") {
+			(3, value)
+		} else {
+			continue;
+		};
+		if fields[index].is_some() {
+			return Err(format!("duplicate status field: {line}"));
+		}
+		fields[index] = Some(parse_csv(value));
+	}
+	let [Some(ports), Some(web), Some(mdom), Some(musr)] = fields else {
+		return Err("incomplete remote status response".into());
+	};
+	Ok((ports, web, mdom, musr))
 }
 
 fn print_field(label: &str, values: &[String]) {
@@ -262,6 +359,69 @@ fn format_age_suffix(age: &str) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn detects_u7() {
+		let output = ssh::RemoteOutput {
+			stdout: "7\n".into(),
+			stderr: String::new(),
+			exit_code: 0,
+		};
+		assert_eq!(parse_detected_version(&output).unwrap(), 7);
+	}
+
+	#[test]
+	fn detects_u8() {
+		let output = ssh::RemoteOutput {
+			stdout: "8\n".into(),
+			stderr: String::new(),
+			exit_code: 0,
+		};
+		assert_eq!(parse_detected_version(&output).unwrap(), 8);
+	}
+
+	#[test]
+	fn rejects_unknown_remote_system() {
+		let output = ssh::RemoteOutput {
+			stdout: String::new(),
+			stderr: "unsupported operating system: ID=debian VERSION_ID=13\n".into(),
+			exit_code: 64,
+		};
+		assert_eq!(
+			parse_detected_version(&output).unwrap_err(),
+			"remote generation detection failed: unsupported operating system: ID=debian VERSION_ID=13"
+		);
+	}
+
+	#[test]
+	fn rejects_malformed_generation_response() {
+		let output = ssh::RemoteOutput {
+			stdout: "9\n".into(),
+			stderr: String::new(),
+			exit_code: 0,
+		};
+		assert_eq!(
+			parse_detected_version(&output).unwrap_err(),
+			"invalid generation response: \"9\""
+		);
+	}
+
+	#[test]
+	fn parses_complete_status_output() {
+		let parsed = parse_status_output("PORTS=40000\r\nWEB=a.de,b.de\nMDOM=\nMUSR=user\n").unwrap();
+		assert_eq!(parsed.0, vec!["40000"]);
+		assert_eq!(parsed.1, vec!["a.de", "b.de"]);
+		assert!(parsed.2.is_empty());
+		assert_eq!(parsed.3, vec!["user"]);
+	}
+
+	#[test]
+	fn rejects_incomplete_status_output() {
+		assert_eq!(
+			parse_status_output("PORTS=\nWEB=\n").unwrap_err(),
+			"incomplete remote status response"
+		);
+	}
 
 	#[test]
 	fn parse_csv_basic() {

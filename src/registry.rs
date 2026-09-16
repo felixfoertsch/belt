@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Asteroid {
@@ -26,13 +26,14 @@ impl Registry {
 	}
 
 	pub fn save(&self, path: &PathBuf) -> Result<(), String> {
-		if let Some(parent) = path.parent() {
-			fs::create_dir_all(parent)
-				.map_err(|e| format!("failed to create config directory: {e}"))?;
-		}
+		let parent = path
+			.parent()
+			.ok_or_else(|| "registry path has no parent directory".to_string())?;
+		fs::create_dir_all(parent)
+			.map_err(|e| format!("failed to create config directory: {e}"))?;
 		let content =
 			toml::to_string_pretty(self).map_err(|e| format!("failed to serialize registry: {e}"))?;
-		fs::write(path, content).map_err(|e| format!("failed to write registry: {e}"))
+		atomic_write(path, content.as_bytes())
 	}
 
 	pub fn add(&mut self, asteroid: Asteroid) {
@@ -54,7 +55,61 @@ impl Registry {
 pub fn registry_path() -> Result<PathBuf, String> {
 	let config_dir =
 		dirs::config_dir().ok_or_else(|| "cannot determine config directory".to_string())?;
-	Ok(config_dir.join("uc").join("registry.toml"))
+	let belt_path = config_dir.join("belt").join("registry.toml");
+	let legacy_path = config_dir.join("uc").join("registry.toml");
+	migrate_legacy_registry(&legacy_path, &belt_path)?;
+	Ok(belt_path)
+}
+
+pub fn validate_asteroid(name: &str, server: &str, version: u8) -> Result<(), String> {
+	if name.is_empty()
+		|| !name
+			.bytes()
+			.all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+	{
+		return Err("name must contain only ASCII letters, digits, '-' or '_'".into());
+	}
+	if server.is_empty()
+		|| server.len() > 253
+		|| server.split('.').any(|label| {
+			label.is_empty()
+				|| label.len() > 63
+				|| label.starts_with('-')
+				|| label.ends_with('-')
+				|| !label
+					.bytes()
+					.all(|c| c.is_ascii_alphanumeric() || c == b'-')
+		})
+	{
+		return Err("server must be a valid DNS hostname".into());
+	}
+	if version != 7 && version != 8 {
+		return Err(format!("version must be 7 or 8, got {version}"));
+	}
+	Ok(())
+}
+
+fn migrate_legacy_registry(legacy_path: &Path, belt_path: &Path) -> Result<(), String> {
+	if belt_path.exists() || !legacy_path.exists() {
+		return Ok(());
+	}
+	let content = fs::read(legacy_path).map_err(|e| format!("failed to read legacy registry: {e}"))?;
+	atomic_write(belt_path, &content)
+		.map_err(|e| format!("failed to migrate legacy registry: {e}"))
+}
+
+fn atomic_write(path: &Path, content: &[u8]) -> Result<(), String> {
+	let parent = path
+		.parent()
+		.ok_or_else(|| "path has no parent directory".to_string())?;
+	fs::create_dir_all(parent).map_err(|e| format!("failed to create directory: {e}"))?;
+	let temp_path = parent.join(format!(
+		".{}.{}.tmp",
+		path.file_name().and_then(|name| name.to_str()).unwrap_or("belt"),
+		std::process::id()
+	));
+	fs::write(&temp_path, content).map_err(|e| format!("failed to write temporary file: {e}"))?;
+	fs::rename(&temp_path, path).map_err(|e| format!("failed to replace file atomically: {e}"))
 }
 
 #[cfg(test)]
@@ -140,9 +195,31 @@ mod tests {
 
 	#[test]
 	fn load_nonexistent_returns_empty() {
-		let path = PathBuf::from("/tmp/uc-test-nonexistent-registry.toml");
+		let path = PathBuf::from("/tmp/belt-test-nonexistent-registry.toml");
 		let reg = Registry::load(&path).unwrap();
 		assert!(reg.asteroid.is_empty());
+	}
+
+	#[test]
+	fn validates_asteroid_fields() {
+		assert!(validate_asteroid("danger", "cetus.uberspace.de", 7).is_ok());
+		assert!(validate_asteroid("../danger", "cetus.uberspace.de", 7).is_err());
+		assert!(validate_asteroid("danger", "bad host", 7).is_err());
+		assert!(validate_asteroid("danger", "cetus.uberspace.de", 9).is_err());
+	}
+
+	#[test]
+	fn migrates_legacy_registry_without_overwriting_belt() {
+		let dir = tempfile::tempdir().unwrap();
+		let legacy = dir.path().join("uc/registry.toml");
+		let belt = dir.path().join("belt/registry.toml");
+		fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+		fs::write(&legacy, "legacy").unwrap();
+		migrate_legacy_registry(&legacy, &belt).unwrap();
+		assert_eq!(fs::read_to_string(&belt).unwrap(), "legacy");
+		fs::write(&legacy, "changed").unwrap();
+		migrate_legacy_registry(&legacy, &belt).unwrap();
+		assert_eq!(fs::read_to_string(&belt).unwrap(), "legacy");
 	}
 
 	#[test]
