@@ -1,5 +1,6 @@
 mod cache;
 mod cli;
+mod dashboard;
 mod registry;
 mod ssh;
 mod status;

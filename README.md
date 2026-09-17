@@ -2,10 +2,10 @@
 
 `belt` is one CLI for an Uberspace asteroid belt. It keeps local asteroid inventory, detects U7 or U8 remotely, wraps public on-server `uberspace` commands over SSH, and presents cached fleet status in human-readable or JSON form.
 
-> Dashboard account and asteroid lifecycle operations are not implemented yet. Uberspace exposes no public dashboard API; those commands wait for captured, redacted network traffic and verified request semantics.
-
 ## Features
 
+- Log in to and out of the Uberspace dashboard.
+- List dashboard asteroids with host, creation date, storage, balance, and price.
 - Manage named local asteroid inventory.
 - Detect U7 (CentOS 7) and U8 (Arch Linux) from `/etc/os-release`.
 - Translate supported canonical commands across U7 and U8.
@@ -58,7 +58,7 @@ Register asteroids:
 ```fish
 belt add danger cetus.uberspace.de 7
 belt add impstr pandora.uberspace.de 8
-belt list
+belt registry list
 ```
 
 Import legacy inventory:
@@ -68,6 +68,17 @@ belt import /path/to/asteroids.list
 ```
 
 Registry lives at `$XDG_CONFIG_HOME/belt/registry.toml`, normally `~/.config/belt/registry.toml`. If no belt registry exists, `~/.config/uc/registry.toml` migrates automatically without deleting its source.
+
+## Dashboard
+
+```fish
+belt account login --login uberspace@example.com
+printf '%s' "$UBERSPACE_PASSWORD" | belt account login --login "$UBERSPACE_LOGIN" --password-stdin
+belt list
+belt account logout
+```
+
+Interactive login prompts for a hidden password. `--password-stdin` supports automation without putting the password in process arguments. Belt stores only the dashboard session under `$XDG_CONFIG_HOME/belt/dashboard-session.json` with mode `0600`. Accounts requiring a second factor are not supported yet.
 
 ## Remote commands
 
@@ -137,4 +148,4 @@ GitHub Actions tests every push and pull request. Pushes to `main` publish a Cal
 
 ## Project status
 
-Remote management works. Dashboard management remains intentionally pending until its private HTTP behavior is captured and verified.
+Remote management works. Dashboard login, logout, and asteroid listing use verified private dashboard HTTP behavior; remaining dashboard lifecycle operations are pending.

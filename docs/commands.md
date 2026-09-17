@@ -5,7 +5,7 @@
 | Command | Effect |
 |---|---|
 | `belt add <name> <host> <7|8>` | Add or replace local asteroid metadata |
-| `belt list` | List local asteroids |
+| `belt registry list` | List local asteroids |
 | `belt remove <name>` | Remove local asteroid and cache |
 | `belt import <asteroids.list>` | Import validated legacy inventory |
 | `belt status [--refresh]` | Show or refresh aggregate remote status |
@@ -36,15 +36,12 @@ Current canonical translations:
 
 ## Dashboard management
 
-Planned command namespace:
+Implemented commands:
 
 ```text
-belt account login
-belt asteroid list
-belt asteroid status <id>
-belt asteroid create ...
-belt asteroid update <id> ...
-belt asteroid delete <id>
+belt account login --login <mail-or-username> [--password-stdin]
+belt account logout
+belt list
 ```
 
-Dashboard endpoints remain undocumented. Commands ship only after request paths, authentication, CSRF behavior, response schemas, and lifecycle semantics are verified against authoritative dashboard traffic.
+`belt list` shows name, hostname and generation, creation date, storage, balance, and price. Belt persists only the dashboard session cookie with mode `0600`. Dashboard second-factor authentication and asteroid lifecycle operations remain unsupported.

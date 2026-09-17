@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 
 use crate::cache;
+use crate::dashboard;
 use crate::registry::{self, Asteroid, Registry};
 use crate::ssh;
 use crate::status;
@@ -33,8 +34,20 @@ enum Commands {
 		version: u8,
 	},
 
-	/// List registered asteroids
+	/// List asteroids from Uberspace dashboard
 	List,
+
+	/// Manage Uberspace dashboard account session
+	Account {
+		#[command(subcommand)]
+		command: AccountCommands,
+	},
+
+	/// Manage local SSH registry
+	Registry {
+		#[command(subcommand)]
+		command: RegistryCommands,
+	},
 
 	/// Deregister an asteroid
 	Remove {
@@ -57,6 +70,27 @@ enum Commands {
 		/// Path to the legacy asteroids.list file
 		path: String,
 	},
+}
+
+#[derive(Subcommand)]
+enum AccountCommands {
+	/// Log in to Uberspace dashboard
+	Login {
+		/// Mail address or username
+		#[arg(long)]
+		login: String,
+		/// Read password from standard input instead of prompting
+		#[arg(long)]
+		password_stdin: bool,
+	},
+	/// Log out and remove local dashboard session
+	Logout,
+}
+
+#[derive(Subcommand)]
+enum RegistryCommands {
+	/// List local SSH registry
+	List,
 }
 
 pub fn run() {
@@ -101,7 +135,12 @@ fn dispatch(cli: Cli) -> Result<(), String> {
 			server,
 			version,
 		}) => cmd_add(&name, &server, version),
-		Some(Commands::List) => cmd_list(),
+		Some(Commands::List) => cmd_dashboard_list(),
+		Some(Commands::Account { command }) => match command {
+			AccountCommands::Login { login, password_stdin } => cmd_account_login(&login, password_stdin),
+			AccountCommands::Logout => cmd_account_logout(),
+		},
+		Some(Commands::Registry { command: RegistryCommands::List }) => cmd_registry_list(),
 		Some(Commands::Remove { name }) => cmd_remove(&name),
 		Some(Commands::Status { refresh, json }) => cmd_status(refresh, json),
 		Some(Commands::Import { path }) => cmd_import(&path),
@@ -135,7 +174,29 @@ fn cmd_add(name: &str, server: &str, version: u8) -> Result<(), String> {
 	Ok(())
 }
 
-fn cmd_list() -> Result<(), String> {
+fn cmd_account_login(login: &str, password_stdin: bool) -> Result<(), String> {
+	dashboard::login(login, password_stdin)?;
+	eprintln!("{} logged in", "[ok]".green());
+	Ok(())
+}
+
+fn cmd_account_logout() -> Result<(), String> {
+	dashboard::logout()?;
+	eprintln!("{} logged out", "[ok]".green());
+	Ok(())
+}
+
+fn cmd_dashboard_list() -> Result<(), String> {
+	let asteroids = dashboard::list()?;
+	println!("  {}", format!("{:<12}  {:<18}  {:<10}  {:<10}  {:>10}  {:>10}", "NAME", "HOST", "CREATED", "STORAGE", "BALANCE", "PRICE").bold());
+	println!("{}", "\u{2500}".repeat(82).dimmed());
+	for asteroid in asteroids {
+		println!("  {:<12}  {:<18}  {:<10}  {:<10}  {:>10}  {:>10}", asteroid.name, asteroid.hostname, asteroid.created, asteroid.storage, asteroid.balance, asteroid.price);
+	}
+	Ok(())
+}
+
+fn cmd_registry_list() -> Result<(), String> {
 	let path = registry::registry_path()?;
 	let reg = Registry::load(&path)?;
 	if reg.asteroid.is_empty() {
