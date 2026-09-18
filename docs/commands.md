@@ -4,11 +4,13 @@
 
 | Command | Effect |
 |---|---|
-| `belt add <name> <host> <7|8>` | Add or replace local asteroid metadata |
-| `belt registry list` | List local asteroids |
+| `belt add <name> <host>` | Detect Uberspace version over SSH, then add or replace local asteroid metadata |
+| `belt add --all` | Merge all dashboard asteroids into local inventory and detect each version over SSH |
+| `belt list` | List local asteroids available to remote commands |
 | `belt remove <name>` | Remove local asteroid and cache |
-| `belt import <asteroids.list>` | Import validated legacy inventory |
-| `belt status [--refresh]` | Show or refresh aggregate remote status |
+| `belt import <inventory.json|inventory.yaml>` | Merge validated JSON or YAML inventory |
+| `belt export [--json|--yaml]` | Export inventory; canonical format is JSON |
+| `belt status [<name>] [--refresh] [--json]` | Show or refresh aggregate or single-asteroid status |
 
 ## Remote wrapper
 
@@ -34,14 +36,12 @@ Current canonical translations:
 
 `tools restart` fails on U8 because no verified equivalent exists. Unknown forms pass through unchanged, allowing generation-specific commands. Remote CLI availability still varies by space; inspect `belt <name> --help` or generation-specific subcommand help before depending on newer commands.
 
-## Dashboard management
-
-Implemented commands:
+## Dashboard session
 
 ```text
-belt account login --login <mail-or-username> [--password-stdin]
-belt account logout
-belt list
+belt login <username> [--password-stdin]
+belt add --all
+belt logout
 ```
 
-`belt list` shows name, hostname and generation, creation date, storage, balance, and price. Belt persists only the dashboard session cookie with mode `0600`. Dashboard second-factor authentication and asteroid lifecycle operations remain unsupported.
+Belt calls dashboard only for explicit dashboard operations. It persists only dashboard session cookie with mode `0600`. Dashboard second-factor authentication and asteroid lifecycle operations remain unsupported.

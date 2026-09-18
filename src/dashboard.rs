@@ -10,7 +10,7 @@ use scraper::{Html, Selector};
 
 const BASE_URL: &str = "https://dashboard.uberspace.de";
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DashboardAsteroid {
     pub name: String,
     pub hostname: String,
@@ -97,7 +97,7 @@ pub fn list() -> Result<Vec<DashboardAsteroid>, String> {
         return Err(format!("dashboard returned HTTP {}", response.status()));
     }
     if response.url().path().starts_with("/login") {
-        return Err("dashboard session expired; run `belt account login`".into());
+        return Err("dashboard session expired; run `belt login <username>`".into());
     }
     parse_asteroids(
         &response
@@ -117,8 +117,8 @@ fn client(store: Arc<CookieStoreMutex>) -> Result<Client, String> {
 
 fn authenticated_client() -> Result<(Client, Arc<CookieStoreMutex>), String> {
     let path = session_path()?;
-    let file =
-        fs::File::open(&path).map_err(|_| "not logged in; run `belt account login`".to_string())?;
+    let file = fs::File::open(&path)
+        .map_err(|_| "not logged in; run `belt login <username>`".to_string())?;
     let store = cookie_store::serde::json::load(BufReader::new(file))
         .map_err(|e| format!("failed to read dashboard session: {e}"))?;
     let store = Arc::new(CookieStoreMutex::new(store));

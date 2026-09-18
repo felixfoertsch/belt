@@ -24,30 +24,31 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-	/// Register an asteroid
+    /// Register asteroid(s)
 	Add {
 		/// Account name
-		name: String,
+        name: Option<String>,
 		/// Server hostname (e.g. cetus.uberspace.de)
-		server: String,
-		/// Uberspace version (7 or 8)
-		version: u8,
+        server: Option<String>,
+        /// Add every asteroid available from dashboard
+        #[arg(long)]
+        all: bool,
 	},
 
-	/// List asteroids from Uberspace dashboard
+    /// List local SSH inventory
 	List,
 
-	/// Manage Uberspace dashboard account session
-	Account {
-		#[command(subcommand)]
-		command: AccountCommands,
+    /// Log in to Uberspace dashboard
+    Login {
+        /// Mail address or username
+        username: String,
+        /// Read password from standard input instead of prompting
+        #[arg(long)]
+        password_stdin: bool,
 	},
 
-	/// Manage local SSH registry
-	Registry {
-		#[command(subcommand)]
-		command: RegistryCommands,
-	},
+    /// Log out and remove local dashboard session
+    Logout,
 
 	/// Deregister an asteroid
 	Remove {
@@ -57,7 +58,9 @@ enum Commands {
 
 	/// Show aggregate status from cache (or refresh all via SSH)
 	Status {
-		/// Refresh all accounts via SSH before showing
+        /// Show one asteroid only
+        name: Option<String>,
+        /// Refresh selected accounts via SSH before showing
 		#[arg(long)]
 		refresh: bool,
 		/// Emit machine-readable JSON
@@ -65,32 +68,21 @@ enum Commands {
 		json: bool,
 	},
 
-	/// Import asteroids from the legacy asteroids.list file
+    /// Import inventory from JSON or YAML
 	Import {
-		/// Path to the legacy asteroids.list file
+        /// JSON or YAML inventory path
 		path: String,
 	},
-}
 
-#[derive(Subcommand)]
-enum AccountCommands {
-	/// Log in to Uberspace dashboard
-	Login {
-		/// Mail address or username
+    /// Export inventory as JSON or YAML
+    Export {
+        /// Write YAML instead of canonical JSON
+        #[arg(long, conflicts_with = "json")]
+        yaml: bool,
+        /// Write canonical JSON
 		#[arg(long)]
-		login: String,
-		/// Read password from standard input instead of prompting
-		#[arg(long)]
-		password_stdin: bool,
+        json: bool,
 	},
-	/// Log out and remove local dashboard session
-	Logout,
-}
-
-#[derive(Subcommand)]
-enum RegistryCommands {
-	/// List local SSH registry
-	List,
 }
 
 pub fn run() {
@@ -130,20 +122,23 @@ pub fn run() {
 
 fn dispatch(cli: Cli) -> Result<(), String> {
 	match cli.command {
-		Some(Commands::Add {
-			name,
-			server,
-			version,
-		}) => cmd_add(&name, &server, version),
-		Some(Commands::List) => cmd_dashboard_list(),
-		Some(Commands::Account { command }) => match command {
-			AccountCommands::Login { login, password_stdin } => cmd_account_login(&login, password_stdin),
-			AccountCommands::Logout => cmd_account_logout(),
-		},
-		Some(Commands::Registry { command: RegistryCommands::List }) => cmd_registry_list(),
+        Some(Commands::Add { name, server, all }) => {
+            cmd_add(name.as_deref(), server.as_deref(), all)
+        }
+        Some(Commands::List) => cmd_list(),
+        Some(Commands::Login {
+            username,
+            password_stdin,
+        }) => dashboard::login(&username, password_stdin),
+        Some(Commands::Logout) => dashboard::logout(),
 		Some(Commands::Remove { name }) => cmd_remove(&name),
-		Some(Commands::Status { refresh, json }) => cmd_status(refresh, json),
+        Some(Commands::Status {
+            name,
+            refresh,
+            json,
+        }) => cmd_status(name.as_deref(), refresh, json),
 		Some(Commands::Import { path }) => cmd_import(&path),
+        Some(Commands::Export { yaml, json: _ }) => cmd_export(yaml),
 		None => {
 			// Fall through to passthrough if args present
 			if cli.args.is_empty() {
@@ -156,52 +151,62 @@ fn dispatch(cli: Cli) -> Result<(), String> {
 	}
 }
 
-fn cmd_add(name: &str, server: &str, version: u8) -> Result<(), String> {
-	registry::validate_asteroid(name, server, version)?;
+fn cmd_add(name: Option<&str>, server: Option<&str>, all: bool) -> Result<(), String> {
+    if all {
+        if name.is_some() || server.is_some() {
+            return Err("--all cannot be combined with name or server".into());
+        }
+        let dashboard_asteroids = dashboard::list()?;
 	let path = registry::registry_path()?;
 	let mut reg = Registry::load(&path)?;
-	reg.add(Asteroid {
+        for dashboard_asteroid in &dashboard_asteroids {
+            registry::validate_asteroid(&dashboard_asteroid.name, &dashboard_asteroid.hostname, 7)?;
+            let probe = Asteroid {
+                name: dashboard_asteroid.name.clone(),
+                server: dashboard_asteroid.hostname.clone(),
+                version: 7,
+            };
+            let version = status::detect_version(&probe)?;
+            reg.add(Asteroid { version, ..probe });
+        }
+        reg.save(&path)?;
+        eprintln!(
+            "{} added {} asteroid(s)",
+            "[ok]".green(),
+            dashboard_asteroids.len()
+        );
+        return Ok(());
+    }
+
+    let name = name.ok_or_else(|| {
+        "missing asteroid name; use `belt add <name> <server>` or `belt add --all`".to_string()
+    })?;
+    let server =
+        server.ok_or_else(|| "missing server; use `belt add <name> <server>`".to_string())?;
+    let probe = Asteroid {
 		name: name.to_string(),
 		server: server.to_string(),
-		version,
-	});
+        version: 7,
+    };
+    registry::validate_asteroid(name, server, 7)?;
+    let version = status::detect_version(&probe)?;
+    let path = registry::registry_path()?;
+    let mut reg = Registry::load(&path)?;
+    reg.add(Asteroid { version, ..probe });
 	reg.save(&path)?;
-	let ver_info = format!("u{version}");
 	eprintln!(
-		"{} registered: {name} @ {server} ({ver_info})",
+        "{} registered: {name} @ {server} (u{version})",
 		"[ok]".green()
 	);
 	Ok(())
 }
 
-fn cmd_account_login(login: &str, password_stdin: bool) -> Result<(), String> {
-	dashboard::login(login, password_stdin)?;
-	eprintln!("{} logged in", "[ok]".green());
-	Ok(())
-}
-
-fn cmd_account_logout() -> Result<(), String> {
-	dashboard::logout()?;
-	eprintln!("{} logged out", "[ok]".green());
-	Ok(())
-}
-
-fn cmd_dashboard_list() -> Result<(), String> {
-	let asteroids = dashboard::list()?;
-	println!("  {}", format!("{:<12}  {:<18}  {:<10}  {:<10}  {:>10}  {:>10}", "NAME", "HOST", "CREATED", "STORAGE", "BALANCE", "PRICE").bold());
-	println!("{}", "\u{2500}".repeat(82).dimmed());
-	for asteroid in asteroids {
-		println!("  {:<12}  {:<18}  {:<10}  {:<10}  {:>10}  {:>10}", asteroid.name, asteroid.hostname, asteroid.created, asteroid.storage, asteroid.balance, asteroid.price);
-	}
-	Ok(())
-}
-
-fn cmd_registry_list() -> Result<(), String> {
+fn cmd_list() -> Result<(), String> {
 	let path = registry::registry_path()?;
 	let reg = Registry::load(&path)?;
 	if reg.asteroid.is_empty() {
 		eprintln!(
-			"{} no accounts registered. Use: belt add <name> <server> <version>",
+            "{} no accounts registered. Use: belt add <name> <server>",
 			"[warn]".yellow()
 		);
 		return Ok(());
@@ -212,10 +217,7 @@ fn cmd_registry_list() -> Result<(), String> {
 	);
 	println!("{}", "\u{2500}".repeat(49).dimmed());
 	for a in &reg.asteroid {
-		println!(
-			"  {:<12}  {:<28}  u{}",
-			a.name, a.server, a.version
-		);
+        println!("  {:<12}  {:<28}  u{}", a.name, a.server, a.version);
 	}
 	Ok(())
 }
@@ -239,12 +241,18 @@ fn cmd_remove(name: &str) -> Result<(), String> {
 	Ok(())
 }
 
-fn cmd_status(refresh: bool, json: bool) -> Result<(), String> {
+fn cmd_status(name: Option<&str>, refresh: bool, json: bool) -> Result<(), String> {
 	let path = registry::registry_path()?;
 	let reg = Registry::load(&path)?;
+    if let Some(name) = name {
+        let asteroid = reg
+            .lookup(name)
+            .ok_or_else(|| format!("'{name}' not found in inventory"))?;
+        return status::show_all(refresh, json, std::slice::from_ref(asteroid));
+    }
 	if reg.asteroid.is_empty() {
 		eprintln!(
-			"{} no accounts registered. Use: belt add <name> <server> <version>",
+            "{} no accounts registered. Use: belt add <name> <server>",
 			"[warn]".yellow()
 		);
 		return Ok(());
@@ -252,49 +260,20 @@ fn cmd_status(refresh: bool, json: bool) -> Result<(), String> {
 	status::show_all(refresh, json, &reg.asteroid)
 }
 
-fn cmd_import(legacy_path: &str) -> Result<(), String> {
-	let content =
-		fs::read_to_string(legacy_path).map_err(|e| format!("failed to read {legacy_path}: {e}"))?;
-
+fn cmd_import(path: &str) -> Result<(), String> {
+    let content = fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?;
+    let imported = if path.ends_with(".yaml") || path.ends_with(".yml") {
+        Registry::from_yaml(&content)?
+    } else {
+        Registry::from_json(&content)?
+    };
 	let reg_path = registry::registry_path()?;
-	let mut reg = Registry::load(&reg_path)?;
-	let mut count = 0;
-
-	for line in content.lines() {
-		let line = line.trim();
-		if line.is_empty() || line.starts_with('#') {
-			continue;
+    let mut registry = Registry::load(&reg_path)?;
+    let count = imported.asteroid.len();
+    for asteroid in imported.asteroid {
+        registry.add(asteroid);
 		}
-		let parts: Vec<&str> = line.split_whitespace().collect();
-		if parts.len() < 2 {
-			eprintln!(
-				"{} skipping malformed line: {line}",
-				"[warn]".yellow()
-			);
-			continue;
-		}
-		let name = parts[0];
-		let server = parts[1];
-		let version: u8 = parts
-			.get(2)
-			.ok_or_else(|| format!("missing version in line: {line}"))?
-			.parse()
-			.map_err(|_| format!("invalid version in line: {line}"))?;
-		registry::validate_asteroid(name, server, version)
-			.map_err(|e| format!("invalid asteroid in line '{line}': {e}"))?;
-
-		reg.add(Asteroid {
-			name: name.to_string(),
-			server: server.to_string(),
-			version,
-		});
-		count += 1;
-
-		// Try to import the corresponding cache file
-		import_cache_file(legacy_path, name)?;
-	}
-
-	reg.save(&reg_path)?;
+    registry.save(&reg_path)?;
 	eprintln!(
 		"{} imported {count} asteroid(s) to {}",
 		"[ok]".green(),
@@ -303,56 +282,17 @@ fn cmd_import(legacy_path: &str) -> Result<(), String> {
 	Ok(())
 }
 
-/// Import a single cache file from the legacy format (KEY=VALUE) to TOML.
-fn import_cache_file(legacy_list_path: &str, name: &str) -> Result<(), String> {
-	use std::path::Path;
-
-	let legacy_dir = Path::new(legacy_list_path)
-		.parent()
-		.ok_or_else(|| "cannot determine legacy directory".to_string())?;
-	let cache_path = legacy_dir.join("cache").join(name);
-
-	if !cache_path.exists() {
-		return Ok(());
+fn cmd_export(yaml: bool) -> Result<(), String> {
+    let registry = Registry::load(&registry::registry_path()?)?;
+    print!(
+        "{}",
+        if yaml {
+            registry.to_yaml()?
+        } else {
+            registry.to_json()?
 	}
-
-	let content = fs::read_to_string(&cache_path)
-		.map_err(|e| format!("failed to read cache for {name}: {e}"))?;
-
-	let mut status = cache::CachedStatus::default();
-	status.name = name.to_string();
-
-	for line in content.lines() {
-		let line = line.trim_end_matches('\r');
-		if let Some(val) = line.strip_prefix("UPDATED=") {
-			status.updated = val.to_string();
-		} else if let Some(val) = line.strip_prefix("SERVER=") {
-			status.server = val.to_string();
-		} else if let Some(val) = line.strip_prefix("VERSION=") {
-			status.version = val.parse().unwrap_or(7);
-		} else if let Some(val) = line.strip_prefix("PORTS=") {
-			status.ports = parse_legacy_csv(val);
-		} else if let Some(val) = line.strip_prefix("WEB_DOMAINS=") {
-			status.web_domains = parse_legacy_csv(val);
-		} else if let Some(val) = line.strip_prefix("MAIL_DOMAINS=") {
-			status.mail_domains = parse_legacy_csv(val);
-		} else if let Some(val) = line.strip_prefix("MAIL_USERS=") {
-			status.mail_users = parse_legacy_csv(val);
-		}
-	}
-
-	cache::save(&status)?;
+    );
 	Ok(())
-}
-
-fn parse_legacy_csv(s: &str) -> Vec<String> {
-	if s.is_empty() {
-		return Vec::new();
-	}
-	s.split(',')
-		.map(|s| s.trim().to_string())
-		.filter(|s| !s.is_empty() && s != "No mailboxes found.")
-		.collect()
 }
 
 fn handle_passthrough(name: &str, rest: &[String]) -> Result<(), String> {
