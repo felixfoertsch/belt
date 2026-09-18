@@ -9,7 +9,7 @@ pub struct Asteroid {
 	pub version: u8,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Registry {
 	#[serde(default)]
 	pub asteroid: Vec<Asteroid>,
@@ -31,8 +31,8 @@ impl Registry {
 			.ok_or_else(|| "registry path has no parent directory".to_string())?;
 		fs::create_dir_all(parent)
 			.map_err(|e| format!("failed to create config directory: {e}"))?;
-		let content =
-			toml::to_string_pretty(self).map_err(|e| format!("failed to serialize registry: {e}"))?;
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| format!("failed to serialize registry: {e}"))?;
 		atomic_write(path, content.as_bytes())
 	}
 
@@ -50,6 +50,40 @@ impl Registry {
 	pub fn lookup(&self, name: &str) -> Option<&Asteroid> {
 		self.asteroid.iter().find(|a| a.name == name)
 	}
+
+    pub fn validate(&self) -> Result<(), String> {
+        for asteroid in &self.asteroid {
+            validate_asteroid(&asteroid.name, &asteroid.server, asteroid.version)?;
+        }
+        Ok(())
+    }
+
+    pub fn from_json(content: &str) -> Result<Self, String> {
+        let registry: Self = serde_json::from_str(content)
+            .map_err(|e| format!("failed to parse JSON inventory: {e}"))?;
+        registry.validate()?;
+        Ok(registry)
+    }
+
+    pub fn from_yaml(content: &str) -> Result<Self, String> {
+        let registry: Self = serde_yaml::from_str(content)
+            .map_err(|e| format!("failed to parse YAML inventory: {e}"))?;
+        registry.validate()?;
+        Ok(registry)
+    }
+
+    pub fn to_json(&self) -> Result<String, String> {
+        serde_json::to_string_pretty(self)
+            .map(|content| format!("{content}\n"))
+            .map_err(|e| format!("failed to serialize JSON inventory: {e}"))
+    }
+
+    pub fn to_yaml(&self) -> Result<String, String> {
+        // JSON remains canonical data model; YAML is alternate serialization only.
+        let canonical = Self::from_json(&self.to_json()?)?;
+        serde_yaml::to_string(&canonical)
+            .map_err(|e| format!("failed to serialize YAML inventory: {e}"))
+    }
 }
 
 pub fn registry_path() -> Result<PathBuf, String> {
@@ -93,9 +127,9 @@ fn migrate_legacy_registry(legacy_path: &Path, belt_path: &Path) -> Result<(), S
 	if belt_path.exists() || !legacy_path.exists() {
 		return Ok(());
 	}
-	let content = fs::read(legacy_path).map_err(|e| format!("failed to read legacy registry: {e}"))?;
-	atomic_write(belt_path, &content)
-		.map_err(|e| format!("failed to migrate legacy registry: {e}"))
+    let content =
+        fs::read(legacy_path).map_err(|e| format!("failed to read legacy registry: {e}"))?;
+    atomic_write(belt_path, &content).map_err(|e| format!("failed to migrate legacy registry: {e}"))
 }
 
 fn atomic_write(path: &Path, content: &[u8]) -> Result<(), String> {
@@ -105,7 +139,9 @@ fn atomic_write(path: &Path, content: &[u8]) -> Result<(), String> {
 	fs::create_dir_all(parent).map_err(|e| format!("failed to create directory: {e}"))?;
 	let temp_path = parent.join(format!(
 		".{}.{}.tmp",
-		path.file_name().and_then(|name| name.to_str()).unwrap_or("belt"),
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("belt"),
 		std::process::id()
 	));
 	fs::write(&temp_path, content).map_err(|e| format!("failed to write temporary file: {e}"))?;
@@ -192,6 +228,25 @@ mod tests {
 		assert_eq!(loaded.lookup("danger").unwrap().version, 7);
 		assert_eq!(loaded.lookup("impstr").unwrap().version, 8);
 	}
+
+    #[test]
+    fn interchange_roundtrips_json_and_yaml() {
+        let registry = Registry {
+            asteroid: vec![Asteroid {
+                name: "danger".into(),
+                server: "cetus.uberspace.de".into(),
+                version: 7,
+            }],
+        };
+        assert_eq!(
+            Registry::from_json(&registry.to_json().unwrap()).unwrap(),
+            registry
+        );
+        assert_eq!(
+            Registry::from_yaml(&registry.to_yaml().unwrap()).unwrap(),
+            registry
+        );
+    }
 
 	#[test]
 	fn load_nonexistent_returns_empty() {
