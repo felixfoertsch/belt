@@ -10,10 +10,11 @@ use scraper::{Html, Selector};
 
 const BASE_URL: &str = "https://dashboard.uberspace.de";
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DashboardAsteroid {
     pub name: String,
     pub hostname: String,
+    pub version: u8,
     pub created: String,
     pub storage: String,
     pub balance: String,
@@ -97,7 +98,7 @@ pub fn list() -> Result<Vec<DashboardAsteroid>, String> {
         return Err(format!("dashboard returned HTTP {}", response.status()));
     }
     if response.url().path().starts_with("/login") {
-        return Err("dashboard session expired; run `belt account login`".into());
+        return Err("dashboard session expired; run `belt login <username>`".into());
     }
     parse_asteroids(
         &response
@@ -117,8 +118,8 @@ fn client(store: Arc<CookieStoreMutex>) -> Result<Client, String> {
 
 fn authenticated_client() -> Result<(Client, Arc<CookieStoreMutex>), String> {
     let path = session_path()?;
-    let file =
-        fs::File::open(&path).map_err(|_| "not logged in; run `belt account login`".to_string())?;
+    let file = fs::File::open(&path)
+        .map_err(|_| "not logged in; run `belt login <username>`".to_string())?;
     let store = cookie_store::serde::json::load(BufReader::new(file))
         .map_err(|e| format!("failed to read dashboard session: {e}"))?;
     let store = Arc::new(CookieStoreMutex::new(store));
@@ -154,9 +155,11 @@ fn parse_asteroids(html: &str) -> Result<Vec<DashboardAsteroid>, String> {
             })
             .collect();
         if values.len() >= 6 {
+            let (hostname, version) = parse_host(&values[1])?;
             asteroids.push(DashboardAsteroid {
                 name: values[0].clone(),
-                hostname: values[1].clone(),
+                hostname,
+                version,
                 created: values[2].clone(),
                 storage: values[3].clone(),
                 balance: values[4].clone(),
@@ -168,6 +171,22 @@ fn parse_asteroids(html: &str) -> Result<Vec<DashboardAsteroid>, String> {
         return Err("dashboard response did not contain an asteroid table".into());
     }
     Ok(asteroids)
+}
+
+fn parse_host(value: &str) -> Result<(String, u8), String> {
+    let (hostname, generation) = value
+        .rsplit_once(" (U")
+        .and_then(|(hostname, generation)| generation.strip_suffix(')').map(|g| (hostname, g)))
+        .ok_or_else(|| format!("dashboard returned invalid host: {value}"))?;
+    let version = generation
+        .parse()
+        .map_err(|_| format!("dashboard returned invalid Uberspace version: {value}"))?;
+    if version != 7 && version != 8 {
+        return Err(format!(
+            "dashboard returned unsupported Uberspace version: U{version}"
+        ));
+    }
+    Ok((hostname.to_string(), version))
 }
 
 fn session_path() -> Result<PathBuf, String> {
@@ -236,7 +255,8 @@ mod tests {
             parse_asteroids(meta).unwrap(),
             vec![DashboardAsteroid {
                 name: "olympus".into(),
-                hostname: "janus (U8)".into(),
+                hostname: "janus".into(),
+                version: 8,
                 created: "2026-03-06".into(),
                 storage: "10 GB".into(),
                 balance: "10,00 €".into(),

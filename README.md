@@ -5,7 +5,7 @@
 ## Features
 
 - Log in to and out of the Uberspace dashboard.
-- List dashboard asteroids with host, creation date, storage, balance, and price.
+- Populate local inventory manually or from dashboard asteroids.
 - Manage named local asteroid inventory.
 - Detect U7 (CentOS 7) and U8 (Arch Linux) from `/etc/os-release`.
 - Translate supported canonical commands across U7 and U8.
@@ -13,7 +13,7 @@
 - Refresh fleet status with bounded SSH and command timeouts.
 - Cache status atomically under `$XDG_CONFIG_HOME/belt`.
 - Emit terminal output or JSON.
-- Import legacy `asteroids.list` and `~/.config/uc/registry.toml` data.
+- Import and export inventory as canonical JSON or YAML.
 
 ## Install
 
@@ -53,18 +53,29 @@ mise run build -- linux
 
 ## Quick start
 
-Register asteroids:
+Register asteroids; Uberspace version is detected over SSH:
 
 ```fish
-belt add danger cetus.uberspace.de 7
-belt add impstr pandora.uberspace.de 8
-belt registry list
+belt add danger cetus.uberspace.de
+belt add impstr pandora.uberspace.de
+belt list
 ```
 
-Import legacy inventory:
+Or log in and merge every dashboard asteroid into local inventory:
 
 ```fish
-belt import /path/to/asteroids.list
+belt login uberspace@example.com
+belt add --all
+belt logout
+```
+
+Export canonical JSON or its YAML representation, then import either format:
+
+```fish
+belt export > inventory.json
+belt export --yaml > inventory.yaml
+belt import inventory.json
+belt import inventory.yaml
 ```
 
 Registry lives at `$XDG_CONFIG_HOME/belt/registry.toml`, normally `~/.config/belt/registry.toml`. If no belt registry exists, `~/.config/uc/registry.toml` migrates automatically without deleting its source.
@@ -72,13 +83,38 @@ Registry lives at `$XDG_CONFIG_HOME/belt/registry.toml`, normally `~/.config/bel
 ## Dashboard
 
 ```fish
-belt account login --login uberspace@example.com
-printf '%s' "$UBERSPACE_PASSWORD" | belt account login --login "$UBERSPACE_LOGIN" --password-stdin
-belt list
-belt account logout
+belt login uberspace@example.com
+printf '%s' "$UBERSPACE_PASSWORD" | belt login "$UBERSPACE_LOGIN" --password-stdin
+belt add --all
+belt logout
 ```
 
 Interactive login prompts for a hidden password. `--password-stdin` supports automation without putting the password in process arguments. Belt stores only the dashboard session under `$XDG_CONFIG_HOME/belt/dashboard-session.json` with mode `0600`. Accounts requiring a second factor are not supported yet.
+
+## Command tree
+
+```text
+belt
+├── add <name> <server>
+├── add -a|--all
+├── export [--json|--yaml]
+├── import <inventory.json|inventory.yaml>
+├── list
+├── login <username> [--password-stdin]
+├── logout
+├── remove <name>
+├── status [<name>] [--refresh] [--json]
+└── <asteroid> <uberspace command...>
+```
+
+- `login` creates a dashboard session. Without `--password-stdin`, belt prompts for a hidden password.
+- `logout` ends the dashboard session and removes its local cookie.
+- `add <name> <server>` detects Uberspace version over SSH; `add --all` merges dashboard asteroids into inventory.
+- `list`, `remove`, `import`, and `export` manage local SSH inventory.
+- `status [<name>]` reads cached fleet status; `--refresh` updates selected asteroids over SSH first.
+- `<asteroid> <uberspace command...>` runs a translated Uberspace command on one registered asteroid.
+
+Every command supports `-h` or `--help`.
 
 ## Remote commands
 
@@ -110,7 +146,8 @@ Unknown forms pass through unchanged for generation-specific commands. Unsupport
 ## Status
 
 ```fish
-belt danger status
+belt status danger
+belt status danger --refresh
 belt status --refresh
 belt status
 belt status --json
@@ -148,4 +185,4 @@ GitHub Actions tests every push and pull request. Pushes to `main` publish a Cal
 
 ## Project status
 
-Remote management works. Dashboard login, logout, and asteroid listing use verified private dashboard HTTP behavior; remaining dashboard lifecycle operations are pending.
+Remote management works. Dashboard login, logout, and inventory population use verified private dashboard HTTP behavior; remaining dashboard lifecycle operations are pending.
